@@ -1,0 +1,222 @@
+Create database Alt_mobility;
+use Alt_mobility;
+
+select * from customer_orders;
+select * from payments;
+
+1. Order and Sales Analysis:
+
+-- Task 1.1: Order Status Distribution and Fulfillment Rate
+SELECT 
+    order_status,
+    COUNT(*) AS order_count,
+    ROUND(COUNT(*) * 100.0 / (SELECT COUNT(*) FROM customer_orders), 2) AS percentage,
+    SUM(order_amount) AS total_revenue,
+    ROUND(AVG(order_amount), 2) AS avg_order_value
+FROM customer_orders
+GROUP BY order_status;
+
+-- Task 1.2: Seasonality Trends (Monthly Trends Across Years)
+SELECT 
+    MONTH(order_date) AS month,
+    MONTHNAME(order_date) AS month_name,
+    COUNT(*) AS order_count,
+    SUM(order_amount) AS total_revenue,
+    ROUND(AVG(order_amount), 2) AS avg_order_value
+FROM customer_orders
+GROUP BY MONTH(order_date), MONTHNAME(order_date)
+ORDER BY MONTH(order_date);
+
+-- Task 1.3: YoY Order Growth
+WITH yearly_orders AS (
+    SELECT 
+        YEAR(order_date) AS year,
+        COUNT(*) AS order_count,
+        SUM(order_amount) AS total_revenue
+    FROM customer_orders
+    GROUP BY YEAR(order_date)
+)
+SELECT 
+    y1.year AS current_year,
+    y1.order_count AS current_order_count,
+    y2.order_count AS previous_order_count,
+    ROUND(((y1.order_count - y2.order_count) / y2.order_count * 100), 2) AS yoy_order_growth_percent,
+    y1.total_revenue AS current_revenue,
+    y2.total_revenue AS previous_revenue,
+    ROUND(((y1.total_revenue - y2.total_revenue) / y2.total_revenue * 100), 2) AS yoy_revenue_growth_percent
+FROM yearly_orders y1
+LEFT JOIN yearly_orders y2 
+    ON y1.year = y2.year + 1
+WHERE y2.year IS NOT NULL
+ORDER BY y1.year;
+
+2. Customer Analysis:
+
+-- Task 2.1: Repeat Ordering Behavior
+WITH customer_orders_count AS (
+    SELECT 
+        customer_id,
+        COUNT(*) AS order_count,
+        MIN(order_date) AS first_order_date,
+        MAX(order_date) AS last_order_date
+    FROM customer_orders
+    GROUP BY customer_id
+)
+SELECT 
+    order_count,
+    COUNT(*) AS customer_count,
+    ROUND(AVG(TIMESTAMPDIFF(DAY, first_order_date, last_order_date) / 365.0), 2) AS avg_years_active
+FROM customer_orders_count
+GROUP BY order_count
+ORDER BY order_count;
+
+-- Task 2.2: Order Frequency per Customer
+WITH customer_order_dates AS (
+    SELECT 
+        customer_id,
+        order_date,
+        LAG(order_date) OVER (PARTITION BY customer_id ORDER BY order_date) AS prev_order_date
+    FROM customer_orders
+),
+order_intervals AS (
+    SELECT 
+        customer_id,
+        TIMESTAMPDIFF(DAY, prev_order_date, order_date) AS days_between_orders
+    FROM customer_order_dates
+    WHERE prev_order_date IS NOT NULL
+)
+SELECT 
+    COUNT(*) AS repeat_customers,
+    ROUND(AVG(days_between_orders), 2) AS avg_days_between_orders,
+    MIN(days_between_orders) AS min_days_between,
+    MAX(days_between_orders) AS max_days_between
+FROM order_intervals;
+
+3. Payment Status Analysis:
+
+-- Task 3.1: Payment Status Distribution
+SELECT 
+    payment_status,
+    COUNT(*) AS payment_count,
+    ROUND(COUNT(*) * 100.0 / (SELECT COUNT(*) FROM payments), 2) AS percentage,
+    SUM(payment_amount) AS total_amount,
+    ROUND(AVG(payment_amount), 2) AS avg_payment_amount
+FROM payments
+GROUP BY payment_status;
+
+-- Task 3.2: Payment Method vs. Status
+SELECT 
+    payment_method,
+    payment_status,
+    COUNT(*) AS payment_count,
+    ROUND(AVG(payment_amount), 2) AS avg_payment_amount
+FROM payments
+GROUP BY payment_method, payment_status
+ORDER BY payment_method, payment_status;
+
+-- Task 3.3: Order-to-Payment Delay
+SELECT 
+    co.order_id,
+    co.order_date,
+    p.payment_date,
+    p.payment_status,
+    TIMESTAMPDIFF(DAY, co.order_date, p.payment_date) AS days_to_payment
+FROM customer_orders co
+JOIN payments p ON co.order_id = p.order_id
+WHERE p.payment_status = 'completed'
+ORDER BY days_to_payment DESC;
+
+-- Task 3.4: Financial Impact of Failed Payments
+SELECT 
+    p.payment_status,
+    SUM(p.payment_amount) AS total_amount_lost,
+    ROUND(SUM(p.payment_amount) * 100.0 / (SELECT SUM(payment_amount) FROM payments), 2) AS percentage_of_total_revenue,
+    COUNT(DISTINCT co.customer_id) AS affected_customers
+FROM payments p
+LEFT JOIN customer_orders co ON p.order_id = p.order_id
+WHERE p.payment_status IN ('failed', 'pending')
+GROUP BY p.payment_status;
+
+-- Task 3.5: YoY Payment Growth
+WITH yearly_payments AS (
+    SELECT 
+        YEAR(payment_date) AS year,
+        COUNT(*) AS payment_count,
+        SUM(payment_amount) AS total_payment_amount,
+        SUM(CASE WHEN payment_status = 'completed' THEN 1 ELSE 0 END) AS completed_payments,
+        ROUND(SUM(CASE WHEN payment_status = 'completed' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS success_rate
+    FROM payments
+    GROUP BY YEAR(payment_date)
+)
+SELECT 
+    y1.year AS current_year,
+    y1.payment_count AS current_payment_count,
+    y2.payment_count AS previous_payment_count,
+    ROUND(((y1.payment_count - y2.payment_count) / y2.payment_count * 100), 2) AS yoy_payment_count_growth_percent,
+    y1.total_payment_amount AS current_payment_amount,
+    y2.total_payment_amount AS previous_payment_amount,
+    ROUND(((y1.total_payment_amount - y2.total_payment_amount) / y2.total_payment_amount * 100), 2) AS yoy_payment_amount_growth_percent,
+    y1.success_rate AS current_success_rate,
+    y2.success_rate AS previous_success_rate,
+    ROUND(y1.success_rate - y2.success_rate, 2) AS success_rate_change
+FROM yearly_payments y1
+LEFT JOIN yearly_payments y2 
+    ON y1.year = y2.year + 1
+WHERE y2.year IS NOT NULL
+ORDER BY y1.year;
+
+4. Order Details Report:
+
+ Comprehensive Report (Revised)
+SELECT 
+    co.order_id,
+    co.customer_id,
+    co.order_date,
+    co.order_amount,
+    co.order_status,
+    coalesce(p.payment_date,"Not Available") as payment_date,
+    coalesce(p.payment_amount,"Not Paid") as payment_amount,
+    coalesce(ROUND(p.payment_amount - co.order_amount, 2),"Not Applicable") AS payment_order_discrepancy,
+    coalesce(p.payment_method,"Not Available") as payment_method,
+    coalesce(p.payment_status,"Not Available") as payment_status,
+    CASE 
+        WHEN p.payment_date IS NOT NULL 
+        THEN TIMESTAMPDIFF(DAY, co.order_date, p.payment_date)
+        ELSE "Not Available"
+    END AS days_to_payment
+FROM customer_orders co
+LEFT JOIN payments p ON co.order_id = p.order_id
+ORDER BY co.order_date;
+
+5. Generating cohort data for Visualization
+
+WITH first_orders AS (
+    SELECT 
+        customer_id,
+        MIN(DATE_FORMAT(order_date, '%Y-%m-01')) AS cohort_month
+    FROM customer_orders
+    GROUP BY customer_id
+),
+orders_with_cohort AS (
+    SELECT 
+        fo.customer_id,
+        fo.cohort_month,
+        DATE_FORMAT(co.order_date, '%Y-%m-01') AS order_month,
+        TIMESTAMPDIFF(MONTH, fo.cohort_month, DATE_FORMAT(co.order_date, '%Y-%m-01')) AS months_since_first
+    FROM first_orders fo
+    JOIN customer_orders co ON fo.customer_id = co.customer_id
+),
+retention_data AS (
+    SELECT 
+        cohort_month,
+        months_since_first,
+        COUNT(DISTINCT customer_id) AS retained_customers
+    FROM orders_with_cohort
+    GROUP BY cohort_month, months_since_first
+)
+SELECT 
+    cohort_month,
+    months_since_first,
+    retained_customers
+FROM retention_data
+ORDER BY cohort_month, months_since_first;
